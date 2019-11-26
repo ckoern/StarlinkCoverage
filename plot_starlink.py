@@ -150,7 +150,7 @@ for j,ra in enumerate(ra_list):
         tle_list.append(tle)
 
 fig2 = plt.figure( figsize = (16,8))
-fig2.text( 0.98, 0.02, r'For details see https://gitlab.com/ckoern/starlinkcoverage', fontfamily = 'monospace', weight = 'bold',
+fig2.text( 0.98, 0.02, r'v0.1   For details see https://gitlab.com/ckoern/starlinkcoverage', fontfamily = 'monospace', weight = 'bold',
                         horizontalalignment = 'right', verticalalignment = 'bottom', color = 'grey' )
 fig2.subplotpars.left = 0.05
 fig2.subplotpars.right = 0.9
