@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
-#import ephem
+from argparse import ArgumentParser
+
 from skyfield.api import load, wgs84, utc
 from skyfield.api import EarthSatellite
 
@@ -16,14 +17,38 @@ import scipy
 
 import sys
 
+
+def load_population_data( init_filename, rebin ):
+    init_dataset = init_filename is not None
+    load_from_numpy = not init_dataset
+    save_as_numpy = init_dataset
+    if load_from_numpy:
+        pop_data = np.load('population_data.npy')
+    else:
+        pop_data_filename = init_filename
+        try:
+            with open(pop_data_filename) as f:
+                for i in range(6): #first 6 lines are header information
+                    f.readline()
+                pop_data = np.loadtxt( f )
+        except:
+            print('Please Provide the GPW Population Count ASCII Data file as command line argument')
+    if save_as_numpy:
+        np.save('population_data', pop_data)
+
+    # rebin data
+    pop_data = np.sum( pop_data.reshape( pop_data.shape[0]//rebin,rebin,pop_data.shape[1]//rebin,rebin )  ,axis = (1,3) )
+
+    return pop_data
+
+parser = ArgumentParser()
+parser.add_argument( "--init", type = str, default = None, help="Provide population data file to generate numpy array data" )
+parser.add_argument( "--rebin", type = int, choices=[1,2,4,8,16,32,64], default=4, help="Rebin the population data for performance increase" )
+parser.add_argument( "--save-plot", action =  "store_true", help="if set, the animation is saved" )
+args = parser.parse_args()
+
 ts = load.timescale()
 
-
-# when setting to true, the ASCII data file is read and saved as npy file. 
-#Using the npy file afterwards will be much faster than reading the ASCII file every time
-init_dataset = False
-#rebins the dataset to increase performance. should be 2^n
-scale_factor = 4
 
 #lat/longitude degrees visible by a satalite at equator (WARNING: this uses a simplification resulting in a non-constant solid angle depending on the lattitude )
 radius_angle = 6.
@@ -32,27 +57,8 @@ seconds_per_frame = 10.
 
 n_frames = 10
 
-load_from_numpy = not init_dataset
-save_as_numpy = init_dataset
 
-if load_from_numpy:
-    pop_data = np.load('population_data.npy')
-else:
-    try:
-        pop_data_filename = sys.argv[1]
-    except:
-        print('Please Provide the GPW Population Count ASCII Data file as command line argument')
-    with open(pop_data_filename) as f:
-        for i in range(6): #first 6 lines are header information
-            f.readline()
-        pop_data = np.loadtxt( f )
-if save_as_numpy:
-    np.save('population_data', pop_data)
-
-
-#sum up population data according to the scale factor 
-original_pop = pop_data[ pop_data > 0 ].sum()
-pop_data = np.sum( pop_data.reshape( pop_data.shape[0]//scale_factor,scale_factor,pop_data.shape[1]//scale_factor,scale_factor )  ,axis = (1,3) )
+pop_data = load_population_data(args.init, args.rebin)
 
 
 #mask negative values in data array (-9999 is used for cells with no available data)
@@ -131,6 +137,11 @@ def build_tle( name, inclination, ra, mean_anomaly = 0, quiet = True):
     return EarthSatellite(line1, line2, name, ts)
 
 
+def get_latlon_at( sat, t ):
+    #t = ts.from_datetime( dt )
+    p = sat.at( t )
+    _lat, _lon = wgs84.latlon_of(p)
+    return _lat.degrees, _lon.degrees
 
 
 sl_incl = 53
@@ -151,14 +162,22 @@ for j,ra in enumerate(ra_list):
         if j%2 == 0:
             ma +=  360./sl_nsats_per_plane / 2.
         tle = build_tle('SAT%d'%i, sl_incl, ra, ma)
-        p = tle.at( now_time )
-        _lat, _lon = wgs84.latlon_of(p)
+        _lat, _lon = get_latlon_at( tle, now_time )
 
-        #tle.compute(now_string)
-        lon.append( _lon.degrees )
-        lat.append( _lat.degrees )
-        pop_list.append(  get_pop_at( lat[-1], lon[-1] ) )
+        lon.append( _lon )
+        lat.append( _lat )
+        pop_list.append(  get_pop_at( _lat, _lon ) )
         tle_list.append(tle)
+
+        
+
+satcount = np.zeros( pop_data.shape )
+for a,b in zip(lat,lon):
+    add_sat_at(a,b, satcount )
+satcount = scipy.ndimage.convolve( satcount, filter_kernel, mode = 'wrap' )
+
+
+
 
 fig2 = plt.figure( figsize = (16,8))
 fig2.text( 0.98, 0.02, r'v0.1   For details see https://gitlab.com/ckoern/starlinkcoverage', fontfamily = 'monospace', weight = 'bold',
@@ -183,11 +202,6 @@ ax2.coastlines()
 satcount_im = None
 ax4.coastlines()
 scat = None
-
-satcount = np.zeros( pop_data.shape )
-for a,b in zip(lat,lon):
-    add_sat_at(a,b, satcount )
-satcount = scipy.ndimage.convolve( satcount, filter_kernel, mode = 'wrap' )
 satcount_im = ax4.imshow( satcount, vmax = satcount.max() + 2, extent = (-180,180, 90,-90) )
 cax = fig2.add_axes([ax4.get_position().x1+0.01,ax4.get_position().y0,0.02,ax4.get_position().height])
 fig2.colorbar( satcount_im, cax = cax )
@@ -204,24 +218,19 @@ def init():
 def update( frame ):
     print('build frame %d...'%frame )
     n = now + timedelta( seconds = seconds_per_frame * int(frame) )
-    #now_string = '{:d}/{:d}/{:d} {:02d}:{:02d}:{:02d}'.format(n.year, n.month, n.day, n.hour, n.minute, n.second)
-    now_time = ts.from_datetime( n )
+    t = ts.from_datetime( n )
+
     lat = []
     lon = []
     satpop = []
     satcount = np.zeros( pop_data.shape )
     for tle in tle_list:
-        # tle.compute(now_string)
-        # lon.append( tle.sublong * to_deg )
-        # lat.append( tle.sublat * to_deg )
-        p = tle.at( now_time )
-        _lat, _lon = wgs84.latlon_of(p)
+        _lat, _lon = get_latlon_at( tle, t )
+        lon.append( _lon )
+        lat.append( _lat )
+        satpop.append( get_pop_at( _lat, _lon )  )
+        add_sat_at( _lat, _lon, satcount )
 
-        #tle.compute(now_string)
-        lon.append( _lon.degrees )
-        lat.append( _lat.degrees )
-        satpop.append( get_pop_at( lat[-1], lon[-1] )  )
-        add_sat_at( lat[-1], lon[-1], satcount )
     scat.set_offsets( np.array([ lon,lat ]).transpose() )
     scat.set_array( np.log( np.array( satpop ) ) )
     satcount = scipy.ndimage.convolve( satcount, filter_kernel, mode = 'wrap' )
@@ -243,11 +252,13 @@ def update( frame ):
 
 print( 'Total Population: ', pop_data.sum() )
 print( 'Averaged Total Population', cum_pop_data.sum() )
-print( 'Original Population: ', original_pop )
+
 from matplotlib.animation import FuncAnimation
 ani = FuncAnimation(fig2, update, frames=np.arange(n_frames),
                             init_func=init, blit=False)
-ani.save('starlink_coverage.gif', writer='imagemagick', fps=1)
+
+if args.save_plot:
+    ani.save('starlink_coverage.gif', writer='imagemagick', fps=1)
 
 plt.show()
 
