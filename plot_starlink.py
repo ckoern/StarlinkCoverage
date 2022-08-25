@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta
-import ephem
+#import ephem
+from skyfield.api import load, wgs84, utc
+from skyfield.api import EarthSatellite
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
@@ -11,13 +13,17 @@ import numpy as np
 from skimage.morphology import disk
 import scipy
 
+
 import sys
+
+ts = load.timescale()
+
 
 # when setting to true, the ASCII data file is read and saved as npy file. 
 #Using the npy file afterwards will be much faster than reading the ASCII file every time
 init_dataset = False
 #rebins the dataset to increase performance. should be 2^n
-scale_factor = 16
+scale_factor = 4
 
 #lat/longitude degrees visible by a satalite at equator (WARNING: this uses a simplification resulting in a non-constant solid angle depending on the lattitude )
 radius_angle = 6.
@@ -68,9 +74,9 @@ filter_kernel = disk(radius_pixels)
 filter_size = filter_kernel.shape[0]
 
 #convolute population with the visibility disk to obtain the total number of people visible at each coodinate 
-cum_pop_data = scipy.ndimage.filters.convolve( pop_data, filter_kernel, mode = 'wrap' )
+cum_pop_data = scipy.ndimage.convolve( pop_data, filter_kernel, mode = 'wrap' )
 
-
+cum_pop_data[cum_pop_data<1] = 1
 
 def get_pop_at(lat, lon):
     ix = (np.abs(data_lon - lon)).argmin()
@@ -87,15 +93,15 @@ fig, (ax, axx) = plt.subplots(2,1)
 ax.imshow( masked_pop_data , norm = LogNorm())
 axx.imshow( cum_pop_data, norm = LogNorm() )
 fig.show()
-now = datetime.now()
-start_of_year = datetime( now.year,1,1,0,0,0 )
+now = datetime.now(tz=utc)
+start_of_year = datetime( now.year,1,1,0,0,0,tzinfo=utc )
 timediff = now - start_of_year
 sat_height = 550.
 sat_period = 95.65
 revolutions_per_day = 24*60./sat_period
 epoch = '{:02d}{:03d}.{:08d}'.format( now.year%2000, timediff.days, int(1e8 * (timediff.seconds-100) / (24*60*60) )  )     # string conforming the TLE epoch syntax
 now_string = '{:d}/{:d}/{:d} {:02d}:{:02d}:{:02d}'.format(now.year, now.month, now.day, now.hour, now.minute, now.second)  # string to form the timestamp for pyepoch TLE.compute()
-
+now_time = ts.from_datetime( now )
 print( epoch )
 print(now_string)
 def checksum(s):
@@ -121,7 +127,9 @@ def build_tle( name, inclination, ra, mean_anomaly = 0, quiet = True):
         print( line1)
         print( line2 )
         print( len(line1), len(line2) )
-    return ephem.readtle(name,line1, line2)
+    #return ephem.readtle(name,line1, line2)
+    return EarthSatellite(line1, line2, name, ts)
+
 
 
 
@@ -143,9 +151,12 @@ for j,ra in enumerate(ra_list):
         if j%2 == 0:
             ma +=  360./sl_nsats_per_plane / 2.
         tle = build_tle('SAT%d'%i, sl_incl, ra, ma)
-        tle.compute(now_string)
-        lon.append( tle.sublong * to_deg )
-        lat.append( tle.sublat * to_deg )
+        p = tle.at( now_time )
+        _lat, _lon = wgs84.latlon_of(p)
+
+        #tle.compute(now_string)
+        lon.append( _lon.degrees )
+        lat.append( _lat.degrees )
         pop_list.append(  get_pop_at( lat[-1], lon[-1] ) )
         tle_list.append(tle)
 
@@ -165,7 +176,7 @@ ax5 = fig2.add_subplot(gs[-1,1])
 ax4.set_title('Number of visible Sats')
 ax2.set_title('Population and Sat Positions')
 
-pop_im = ax2.imshow( masked_pop_data, extent = (-180,180, 90,-90),norm = LogNorm() )
+pop_im = ax2.imshow( masked_pop_data, extent = (-180,180, 90,-90),norm = LogNorm(), origin="lower" )
 # cax = fig2.add_axes([ax2.get_position().x1+0.01,ax2.get_position().y0,0.02,ax2.get_position().height])
 # fig2.colorbar( pop_im, cax = cax )
 ax2.coastlines()
@@ -176,7 +187,7 @@ scat = None
 satcount = np.zeros( pop_data.shape )
 for a,b in zip(lat,lon):
     add_sat_at(a,b, satcount )
-satcount = scipy.ndimage.filters.convolve( satcount, filter_kernel, mode = 'wrap' )
+satcount = scipy.ndimage.convolve( satcount, filter_kernel, mode = 'wrap' )
 satcount_im = ax4.imshow( satcount, vmax = satcount.max() + 2, extent = (-180,180, 90,-90) )
 cax = fig2.add_axes([ax4.get_position().x1+0.01,ax4.get_position().y0,0.02,ax4.get_position().height])
 fig2.colorbar( satcount_im, cax = cax )
@@ -193,20 +204,27 @@ def init():
 def update( frame ):
     print('build frame %d...'%frame )
     n = now + timedelta( seconds = seconds_per_frame * int(frame) )
-    now_string = '{:d}/{:d}/{:d} {:02d}:{:02d}:{:02d}'.format(n.year, n.month, n.day, n.hour, n.minute, n.second)
+    #now_string = '{:d}/{:d}/{:d} {:02d}:{:02d}:{:02d}'.format(n.year, n.month, n.day, n.hour, n.minute, n.second)
+    now_time = ts.from_datetime( n )
     lat = []
     lon = []
     satpop = []
     satcount = np.zeros( pop_data.shape )
     for tle in tle_list:
-        tle.compute(now_string)
-        lon.append( tle.sublong * to_deg )
-        lat.append( tle.sublat * to_deg )
+        # tle.compute(now_string)
+        # lon.append( tle.sublong * to_deg )
+        # lat.append( tle.sublat * to_deg )
+        p = tle.at( now_time )
+        _lat, _lon = wgs84.latlon_of(p)
+
+        #tle.compute(now_string)
+        lon.append( _lon.degrees )
+        lat.append( _lat.degrees )
         satpop.append( get_pop_at( lat[-1], lon[-1] )  )
         add_sat_at( lat[-1], lon[-1], satcount )
     scat.set_offsets( np.array([ lon,lat ]).transpose() )
     scat.set_array( np.log( np.array( satpop ) ) )
-    satcount = scipy.ndimage.filters.convolve( satcount, filter_kernel, mode = 'wrap' )
+    satcount = scipy.ndimage.convolve( satcount, filter_kernel, mode = 'wrap' )
     satcount_im.set_data( satcount )
     ax3.clear()
     ax3.set_title('Visible Humans per Sat')
