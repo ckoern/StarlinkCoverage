@@ -180,7 +180,11 @@ sl_nsats_per_plane = 66
 sl_nplanes = 24
 
 sl_constellation = [
-    (sl_height, sl_incl, sl_nplanes, sl_nsats_per_plane)
+    (550., 53., 22, 72),
+    (540., 53.2, 22, 72),
+    (570., 70, 20, 36),
+    (560., 97.6, 58, 6),
+    (560., 97.6, 43, 4),
 ]
 
 lat = []
@@ -207,7 +211,7 @@ satcount = scipy.ndimage.convolve( satcount, filter_kernel, mode = 'wrap' )
 
 
 fig2 = plt.figure( figsize = (16,8))
-fig2.text( 0.98, 0.02, r'v0.1   For details see https://gitlab.com/ckoern/starlinkcoverage', fontfamily = 'monospace', weight = 'bold',
+fig2.text( 0.98, 0.02, r'v0.2   For details see https://gitlab.com/ckoern/starlinkcoverage', fontfamily = 'monospace', weight = 'bold',
                         horizontalalignment = 'right', verticalalignment = 'bottom', color = 'grey' )
 fig2.subplotpars.left = 0.05
 fig2.subplotpars.right = 0.9
