@@ -14,6 +14,7 @@ import numpy as np
 from skimage.morphology import disk
 import scipy
 
+import itertools
 
 import sys
 
@@ -95,6 +96,12 @@ def add_sat_at(lat,lon, buff):
     iy = (np.abs( data_lat - lat )).argmin()
     buff[iy,ix] += 1
 
+def orbital_period( height):
+    R = 6371 # earth radius in km
+    mu = 3.986004418e14 # gravitational parameter
+    a = (R+height)*1e3
+    return 2*np.pi*(a**3/mu)**.5/60 #orbital period in minutes
+
 fig, (ax, axx) = plt.subplots(2,1)
 ax.imshow( masked_pop_data , norm = LogNorm())
 axx.imshow( cum_pop_data, norm = LogNorm() )
@@ -102,9 +109,8 @@ fig.show()
 now = datetime.now(tz=utc)
 start_of_year = datetime( now.year,1,1,0,0,0,tzinfo=utc )
 timediff = now - start_of_year
-sat_height = 550.
-sat_period = 95.65
-revolutions_per_day = 24*60./sat_period
+
+
 epoch = '{:02d}{:03d}.{:08d}'.format( now.year%2000, timediff.days, int(1e8 * (timediff.seconds-100) / (24*60*60) )  )     # string conforming the TLE epoch syntax
 now_string = '{:d}/{:d}/{:d} {:02d}:{:02d}:{:02d}'.format(now.year, now.month, now.day, now.hour, now.minute, now.second)  # string to form the timestamp for pyepoch TLE.compute()
 now_time = ts.from_datetime( now )
@@ -121,7 +127,7 @@ def checksum(s):
                 checksum += 1
     return checksum%10
 
-def build_tle( name, inclination, ra, mean_anomaly = 0, quiet = True):
+def build_tle( name, inclination, ra, mean_anomaly, revolutions_per_day, quiet = True):
     # builds TLE based on actual Starlink-77 TLE. Only inclination, RAAN and mean anomaly can be changed to create TLEs for the constellation
     line1 = '1 44291U 19029BJ  {}  .00001597  00000-0  12902-3 0  999'.format(epoch)
     line1 += str( checksum(line1) )
@@ -137,6 +143,29 @@ def build_tle( name, inclination, ra, mean_anomaly = 0, quiet = True):
     return EarthSatellite(line1, line2, name, ts)
 
 
+def generate_constellation( planes ):
+    
+    sats = []
+
+    sat_counter = itertools.count()
+
+    for plane in planes:
+        height, inclination, nplanes, nsats_per_plane = plane
+        revolutions_per_day = 24*60 / orbital_period(height)
+        print(f"Revs per day: {revolutions_per_day:.2f}")
+        print(f"Period: {orbital_period(height):.2f}")
+        ra_list = np.linspace(0,360,nplanes, endpoint = False)
+        ma_list = np.linspace(0,360,nsats_per_plane, endpoint = False)
+
+        for j,ra in enumerate(ra_list):
+            for ma in ma_list:
+                if j%2 == 0:
+                    ma +=  360./sl_nsats_per_plane / 2.
+                tle = build_tle(f'SAT{next(sat_counter)}', inclination, ra, ma,revolutions_per_day)
+                sats.append(tle)
+    return sats
+
+
 def get_latlon_at( sat, t ):
     #t = ts.from_datetime( dt )
     p = sat.at( t )
@@ -144,30 +173,28 @@ def get_latlon_at( sat, t ):
     return _lat.degrees, _lon.degrees
 
 
+
+sl_height = 550.
 sl_incl = 53
 sl_nsats_per_plane = 66
 sl_nplanes = 24
-to_deg = 180./np.pi
-ra_list = 360./sl_nplanes * np.arange(sl_nplanes)
-ma_list = 360./sl_nsats_per_plane * np.arange( sl_nsats_per_plane )
-i=0
-tle_list = []
+
+sl_constellation = [
+    (sl_height, sl_incl, sl_nplanes, sl_nsats_per_plane)
+]
+
 lat = []
 lon = []
 pop_list = []
 #generate TLEs for all sats
-for j,ra in enumerate(ra_list):
-    for ma in ma_list:
-        i+= 1
-        if j%2 == 0:
-            ma +=  360./sl_nsats_per_plane / 2.
-        tle = build_tle('SAT%d'%i, sl_incl, ra, ma)
-        _lat, _lon = get_latlon_at( tle, now_time )
+tle_list = generate_constellation(sl_constellation)
+print(len(tle_list))
+for tle in tle_list:
+    _lat, _lon = get_latlon_at( tle, now_time )
 
-        lon.append( _lon )
-        lat.append( _lat )
-        pop_list.append(  get_pop_at( _lat, _lon ) )
-        tle_list.append(tle)
+    lon.append( _lon )
+    lat.append( _lat )
+    pop_list.append(  get_pop_at( _lat, _lon ) )
 
         
 
